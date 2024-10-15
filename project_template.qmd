@@ -1,0 +1,465 @@
+---
+title: Evaluating Laptop Price by Features
+author: 
+  - name: Liv Erickson
+    email: oerickson24@gsb.columbia.edu
+    affiliations:
+      - name: Columbia University
+        city: New York
+        state: NY
+    metadata:
+        bio: "Ecosystem Development Lead, Mozilla Innovation"
+date: today # this will be whatever date it is rendered
+date-format: long
+abstract: "This project explores the relationship between laptop features and price."
+format:
+    html: 
+      toc: true
+      toc-location: left
+      number-sections: true
+      toc-collapsed: false
+      embed-resources: true
+      email-obfuscation: javascript
+      code-link: true
+      code-copy: hover
+      code-line-numbers: false
+self-contained: true
+
+callout-icon: false
+# code-block-border-left: false
+highlight-style: atom-one
+
+knitr: 
+  opts_chunk: 
+    cache: true
+    autodep: true
+    echo: true # already the default
+    error: false # this is the default already
+    fig-width: 10
+---
+
+```{r setup-packages}
+#| code-fold: true
+#| code-summary: "Show packages"
+library(readr)
+library(kableExtra)
+library(tidyr)
+library(ggplot2)
+library(dplyr)
+library(scales)
+library(tidyverse)
+library(rsample)
+library(recipes)
+library(parsnip)
+library(workflows)
+library(yardstick)
+library(dials)
+library(tune)
+library(coefplot)
+library(reactable)
+library(ggthemes)
+library(broom)
+library(patchwork)
+```
+
+
+# Data
+
+This project utilizes a [machine-learning optimized](https://www.kaggle.com/datasets/owm4096/laptop-prices?resource=download) dataset from Kaggle, created from a [human-readable](https://www.kaggle.com/datasets/muhammetvarl/laptop-price/) dataset that includes a number of features that may impact the price of a laptop. The data set was downloaded from Kaggle.com. The dataset contains 1275 rows and 23 columns.
+
+I chose this dataset because I was interested to learn more about what factors influence the cost of a laptop, and there were a lot of potential areas to explore given the number of features of the dataset. 
+
+To simplify the labels on the plots, a subsection of the laptops are used in the visualization section to improve readability.
+
+```{r setup data}
+#| code-fold: true
+#| code-summary: "Show code"
+
+laptops <- read_csv('laptop_prices.csv', show_col_types = FALSE)
+feature_names <-names(laptops)
+reactable(laptops)
+
+# Remove some companies for easier graphing
+graph_laptops <- laptops[!laptops$Company %in% c("Acer", "Chuwi", "Fujitsu",  "Huawei", "Mediacom", "Vero", "Xiaomi"), ]
+
+```
+
+# Exploratory Data Analysis
+
+## Examining laptops by type
+
+```{r initial data exploration - graphed laptops}
+#| code-fold: true
+#| code-summary: "Show code"
+
+ggplot(graph_laptops, aes(y=TypeName, x=Price_euros)) + 
+  geom_point(aes(size=Weight, color=TypeName)) + labs(
+    title = 'Visualization of laptops', 
+    subtitle = 'By type of laptop and weight'
+  ) + theme_fivethirtyeight() + theme(
+    legend.position = 'right', 
+    legend.direction='vertical') + 
+  scale_x_continuous(labels = dollar_format(suffix="€", prefix = "")) + 
+  ylab('Price in Euros') + guides(
+    color='none',
+    size=guide_legend('Weight (kg)')
+  ) 
+
+```
+
+From the above plot, we can see some trends in laptops related to type, weight, and price. Gaming laptops are significantly heavier than all other types of laptops, and have a wide range in terms of price. Ultrabooks weigh less than other types of laptops relative to their cost. Further plotting exercises could break down the weight based on characteristics, such as GPU manufacturer or screen size.
+
+```{r plot-weight-features}
+#| code-fold: true
+#| code-summary: "Show code"
+
+ggplot(graph_laptops, aes(y=Weight, x=Inches)) + 
+  geom_point(aes(color=GPU_company, shape=TypeName)) + labs(
+    title = 'Feature influence on weight',
+    subtitle = 'by Screen Size and GPU company', 
+  ) + theme_fivethirtyeight() + 
+  theme(
+    legend.position='bottom', 
+    axis.title.x = element_text(), 
+    axis.title.y = element_text()) + 
+  guides(
+    color=guide_legend('GPU Company:'),
+    shape=guide_legend(' ', position='right', direction='vertical')
+  ) + xlab('Screen size (inches)') + ylab('Weight (kg)')
+
+```
+
+An additional data insight that we can derive from this plot is that Nvidia almost exclusively produces GPUs for laptops with large screen sizes for the gaming market, while Intel powers the graphics chips for most screens smaller than 15.4".
+
+## Examining pricing ranges by company
+
+```{r initial data exploration - pricing range}
+#| code-fold: true
+#| code-summary: "Show code"
+
+graph_laptops |> ggplot(aes(x = Company, y = Price_euros, fill = Company)) + geom_boxplot() + 
+  labs(
+  title = "Laptop prices by company",
+  subtitle = "Box and whisker plot of select companies",
+) + ylab('Price in Euros') +
+    scale_y_continuous(labels = dollar_format(suffix="€", prefix = "")) + 
+    theme_fivethirtyeight() + theme(legend.position='none')
+
+```
+
+From the above box and whisker plot, we are able to quickly see the various price points of laptops by manufacturer. Razer operates primarily at the high range of the market with a significant range of price points for their products, while LG has a very narrow scope in terms of product price points.
+
+## Mean pricing by type and company
+
+```{r initial data exploration - mean pricing}
+
+overall_average <- graph_laptops |> summarize(mean(Price_euros, na.rm=TRUE))
+
+average_by_brand <- graph_laptops |> group_by(Company) |> summarize(
+  `Average Price` = mean(Price_euros, na.rm=TRUE),
+  `Distance from Overall Average` = `Average Price` - overall_average[[1]]
+) 
+
+average_plot <- average_by_brand |> ggplot(aes(y=`Average Price`, x=Company)) + 
+  geom_point() + 
+  labs(
+  title = "Average laptop price by company", 
+  subtitle = "Point plot of selected companies"
+) + scale_y_continuous(labels = dollar_format(suffix="€", prefix = "")) + 
+  ylab('Price in Euros')
+
+average_plot + geom_hline(
+  yintercept=overall_average[[1]], 
+  linetype='dashed',
+  color='red') + theme_fivethirtyeight()
+
+
+```
+
+The above plot shows that Razer has the highest average cost of any company, while Dell is statistically equivalent to the mean price across all laptop manufacturers.
+
+```{r initial data exploration - summaries}
+summary_table_company <- laptops |> group_by(Company) |> summarize(
+  `Average Price for Company (€)` = round(mean(Price_euros, na.rm=TRUE), 2), 
+  `Minimum (€)` = min(Price_euros, na.rm=TRUE),
+  `Maximum (€)` = max(Price_euros, na.rm=TRUE),
+  `Range (€)` = max(Price_euros, na.rm=TRUE) - min(Price_euros, na.rm=TRUE)
+)
+
+reactable(arrange(summary_table_company, summary_table_company$`Average Price for Company (€)`), defaultPageSize = 5)
+
+summary_table_type <- laptops |> group_by(TypeName) |> summarize(
+  `Average Price for Type of Laptop (€)` = round(mean(Price_euros, na.rm=TRUE), 2), 
+  `Minimum (€)` = min(Price_euros, na.rm=TRUE),
+  `Maximum (€)` = max(Price_euros, na.rm=TRUE),
+  `Range (€)` = max(Price_euros, na.rm=TRUE) - min(Price_euros, na.rm=TRUE)
+) 
+
+reactable(arrange(summary_table_type, summary_table_type$`Average Price for Type of Laptop (€)`), defaultPageSize = 6)
+
+```
+
+
+# Modeling
+
+For the initial model, I am interested in a tuned lasso-ridge regression that identifies the strongest predictors of laptop pricing. The model will utilize a tuning grid to find the optimal penalty and split parameters. To evaluate the model quality, we will capture MAPE and RMSE. I selected MAPE because it was measured in an absolute percentage value, which I thought would be a helpful and quick way of comparing models to one another. 
+
+```{r modeling - first pass}
+
+# Split based on price for training and testing
+test_split <- initial_split(
+  laptops, 
+  strata = 'Price_euros'
+)
+
+laptop_train <- training(test_split)
+laptop_test <- testing(test_split)
+
+# Cross-validation split
+cv_split <- vfold_cv(
+  laptop_train,
+  v = 10, 
+  strata = 'Price_euros'
+)
+
+# Build our initial recipe. We will remove the 'Product' name as an indicator.
+rec_laptops <- recipe(Price_euros ~ . , data = laptop_train) |> 
+  step_rm(Product) |> 
+  step_novel(all_nominal_predictors(), new_level='unseen') |> 
+  step_unknown(all_nominal_predictors(), new_level='missing') |>  
+  step_other(all_nominal_predictors(), other='misc') |>  
+  step_normalize(all_numeric_predictors()) |> 
+  step_nzv(all_predictors()) |> 
+  step_dummy(all_nominal_predictors(), one_hot = TRUE)
+
+# We will fine-tune for values for penalty and mixture
+spec_laptops <- linear_reg(engine='glmnet', penalty=tune(), mixture=tune())
+
+# Set up our workflow
+flow_laptops <- workflow(preprocessor = rec_laptops, spec_laptops)
+
+# Set up our tuning grid
+grid_laptops <- flow_laptops |> 
+  extract_parameter_set_dials() |> grid_random(size=100)
+
+# Set model quality for RMSE and MAPE
+model_quality <- metric_set(rmse, mape)
+
+# Model tuning
+tune_laptops <- tune_grid(
+  flow_laptops, 
+  resamples=cv_split, 
+  grid=grid_laptops,
+  metrics=model_quality, 
+  control=control_grid(verbose=FALSE)
+)
+
+# Finalize with the selected best using MAPE 
+model_laptops_mape <- finalize_workflow(
+  x=flow_laptops, 
+  parameters=tune_laptops |> select_best(metric='mape')
+)
+
+model_laptops_mape
+
+# Finalize with the selected best using RMSE
+model_laptops_rmse <- finalize_workflow(
+  x=flow_laptops, 
+  parameters=tune_laptops |> select_best(metric='rmse')
+)
+
+model_laptops_rmse
+
+# Fit and extract engine to generate coefficient plots
+best_fit_laptops_mape <- model_laptops_mape |> fit(data=laptop_train)
+coef_mape <- best_fit_laptops_mape |> extract_fit_engine() |> coefplot(sort='magnitude')
+
+best_fit_laptops_rmse <- model_laptops_rmse |> fit(data=laptop_train)
+coef_rmse <- best_fit_laptops_rmse |> extract_fit_engine() |> coefplot(sort='magnitude')
+
+# Display the coefficient plots using patchwork
+coef_mape + coef_rmse
+
+# Predict the prices for our held-back testing data on our MAPE model
+predict_price <- predict(best_fit_laptops_mape, new_data = laptop_test, type="numeric")
+
+# Generate a tibble with our results and the original product name/price to compare
+predict_price_results <- laptop_test |> select(Product, Price_euros) |> bind_cols(predict_price)
+predict_price_results$error <- predict_price_results$Price_euros - predict_price_results$.pred
+
+# Show the results tibble
+reactable(predict_price_results, defaultPageSize = 5)
+
+# Evaluate the average error in euro
+mean(abs(predict_price_results$error))
+
+```
+
+## Manually creating a coefficient plot - summarized fit
+
+I spent some time looking at the coefficient plot auto-graphing capabilities and wanted to explore the possibility of creating a manual coefficient plot with `ggplot`. Given the time constraints, I chose to use the summarized mean for each coefficient value of the best fit model.
+
+```{r modeling - step summarized coefficent plot}
+tidy_bf <- best_fit_laptops_mape |> extract_fit_engine() 
+tidy_bf <- tidy(tidy_bf)
+tidy_bf_sum <- group_by(tidy_bf, term) |> summarize(estimate = mean(.data$estimate))
+
+# Create a coefficient plot. Drop the predictors that are close to zero (+/- 10 euros) 
+tidy_bf_sum |> filter(estimate < -10 | estimate > 10) |>  mutate(
+  term = fct_reorder(term, estimate)) |> 
+  ggplot(aes(estimate, term)) + 
+  geom_point() + 
+  geom_vline(xintercept = 0, lty = 2) +
+  labs(
+    x = 'Value',
+    y = NULL, 
+    title = 'Coefficient Plot - Step Summarized'
+  ) + theme_fivethirtyeight() + theme(
+    text = element_text(
+      size=8,
+  ))
+
+```
+
+
+## Comparison to fewer predictors
+
+I was interested to see how narrowing down the model to a select few variables would differ in terms of the model quality. I selected the `Price_euros`, `Ram`, `ScreenW`, `ScreenHeight`, `Company`, `TypeName`, and `OS` as potential predictors, reflecting likely characteristics that people might consider when making purchasing decisions.
+
+```{r smaller-model}
+
+# Create a new recipe with selected predictors
+simple_laptop_recipe <- recipe(Price_euros ~ Ram + ScreenW + ScreenH + Company + TypeName + OS, data=laptop_train) |> 
+  step_novel(all_nominal_predictors(), new_level='unseen') |> 
+  step_unknown(all_nominal_predictors(), new_level='missing') |>  
+  step_other(all_nominal_predictors(), other='misc') |>  
+  step_normalize(all_numeric_predictors()) |> 
+  step_nzv(all_predictors()) |> 
+  step_dummy(all_nominal_predictors(), one_hot = TRUE)
+
+# Set up workflow, grid, quality metrics
+simple_laptop_flow <- workflow(preprocessor = simple_laptop_recipe, spec = spec_laptops) 
+
+simple_grid <- simple_laptop_flow |> extract_parameter_set_dials() |> grid_random(size=25)
+
+model_quality <- metric_set(mape)
+
+# Fine-tune penalty and mixture
+tune_laptops_simple <- tune_grid(
+  simple_laptop_flow, 
+  resamples=cv_split, 
+  grid=grid_laptops,
+  metrics=model_quality, 
+  control=control_grid(verbose=FALSE)
+)
+
+# Finalize workflow
+simple_model_laptops_mape <- finalize_workflow(
+  x=simple_laptop_flow, 
+  parameters=tune_laptops_simple |> select_by_one_std_err(metric='mape', -penalty)
+)
+
+# Fit and plot
+simple_best_fit_laptops <- simple_model_laptops_mape |> fit(data=laptop_train)
+simple_best_fit_laptops |> extract_fit_engine() |> coefplot(sort='magnitude')
+
+# Predict on our held-back test data and combine into a new results tibble
+predict_simple <- predict(simple_best_fit_laptops, new_data = laptop_test, type="numeric")
+predict_simple_results <- laptop_test |> select(Product, Price_euros) |> bind_cols(predict_simple)
+predict_simple_results$error <- predict_simple_results$Price_euros - predict_simple_results$.pred
+
+# Display results
+reactable(predict_simple_results, defaultPageSize = 5)
+mean(abs(predict_simple_results$error))
+
+```
+
+We can see that our simplified model has a mean error of the absolute value of the price of 275.10€. This is worse than the best fit by MAPE model by 34.12€. 
+
+# Summary
+
+The models above both performed somewhat well ("Reasonable Forecasting" [according to Lewes](https://www.researchgate.net/figure/nterpretation-of-typical-MAPE-values_tbl1_257812432)) given the MAPE values of 27% and 32%. Predicting laptop price from this dataset resulted in an absolute average error around 250-275€, which is quite high for low-end laptops, but would be accurate with 10% for an average Razer laptop or Workstation type machine. 
+
+## Learnings: Model Metrics
+
+```{r}
+tuning_metrics <- tune_laptops |> collect_metrics()
+simple_metrics <- tune_laptops_simple |> collect_metrics()
+
+tm <- tuning_metrics |> group_by(.metric) |> summarise(mean = mean(.data$mean), na.rm=TRUE)
+sm <- simple_metrics |> group_by(.metric) |> summarise(mean=mean(.data$mean), na.rm=TRUE)
+sm$.metric <- 'mape-simple'
+
+metrics <- rbind(tm, sm)
+kable(metrics)
+```
+
+## Analysis of Step_Other Threshold
+One difficulty in selecting a threshold for `step_other()` was that there were a significant difference in unique levels. With the default (`threshold = 0.05`), one of the most influential coefficients was `TypeName_misc`. Experimenting with different values (`threshold=20`) revealed that this was due to `TypeName_Workstation`'s influence on the model, but this value resulted in a huge number of coefficients across the CPU and GPU models. 
+
+```{r explore-uniques}
+names_unique <- c('Unique GPU Models', 'Unique CPU Models', 'Unique Types')
+data_unique <- c(length(unique(laptops$GPU_model)), length(unique(laptops$CPU_model)), length(unique(laptops$TypeName)))
+
+unique_tb <- data.frame(names_unique, data_unique)
+names(unique_tb) <- c('Descriptor', 'Count')
+kable(unique_tb)
+
+```
+
+## Surprising Find: Gaming Laptops
+I was surprised that gaming laptops were negatively correlated to price. My intuition would have been that gaming laptops would have better graphics cards, and subsequently cost more, but it turns out that it is slightly negatively correlated. 
+
+## Surprising Find: Lenovo Pricing
+I was surprised to find that the average price of a Lenovo laptop was below the overall mean. I have observed many organizations that procure Lenovo laptops for their employees, and would have assumed that the laptops were above the average cost due to the nature of enterprise sales. As a result of the finding, I'm more aware of how each company may be pricing along their respective "value stick", and that perhaps Lenovo laptops are so popular in enterprise settings as a result of their price relative to longevity and/or performance.
+
+## Surprising Find: AMD GPUs 
+Prior to building these models, I would have hypothesized that AMD and Nvidia `GPU_company` values would have been positively correlated with price. I was surprised to find that Nvidia was not a meaningful factor at all, while AMD was negatively correlated with price. 
+
+```{r count-GPU-types}
+length(which(laptops$GPU_company=='AMD'))
+length(which(laptops$GPU_company=='Nvidia'))
+
+```
+I thought perhaps that AMD had very few occurrances in the dataset, but it looks to be a bit more than 10% of the total laptops in the dataset.
+
+# Bonus Model
+
+Can we predict whether or not a computer is an Ultrabook or Notebook? This additional model uses logistic regression to choose a binary outcome for whether or not a laptop is likely to be a high-end Ultrabook, or a low-cost Notebook.
+
+```{r simple logistic regression}
+
+laptop_subset <- filter(laptops, laptops$TypeName %in% c('Ultrabook', 'Notebook'))
+laptop_subset <- select(laptop_subset, c('Company','OS', 'TypeName', 'Inches', 'Ram', 'Weight', 'Price_euros', 'Screen', 'Touchscreen', 'RetinaDisplay', 'PrimaryStorageType', 'GPU_company') )
+laptop_subset$TypeName <- as_factor(laptop_subset$TypeName)
+
+set.seed(13)
+subset_split <- initial_split(
+  laptop_subset, 
+  strata = 'TypeName'
+)
+
+subset_train <- training(subset_split)
+subset_test <- testing(subset_split)
+
+
+simple_model <- logistic_reg(engine='glmnet', penalty=0.01) |> 
+  fit(as_factor(TypeName) ~ ., data=subset_train) 
+
+coefplot(simple_model |> extract_fit_engine(), sort='magnitude')
+
+reactable(tidy(simple_model))
+
+predict_ultrabook <- predict(simple_model, new_data = subset_test, type="class")
+# Class Probabilities
+probability_ultrabook <- predict(simple_model, new_data = subset_test, type = "prob")
+
+prediction_results <- subset_test |> select(TypeName) |> bind_cols(predict_ultrabook, probability_ultrabook)
+reactable(prediction_results)
+
+reactable(accuracy(prediction_results, truth = TypeName, estimate = .pred_class))
+
+```
+This exercise demonstrates the power of market segmentation. The extremely high predictability success of an Ultrabook vs. a Notebook laptop shows that there were likely careful considerations put into play about to market a high end consumer offering vs. a more affordable option. From the coefficients, we can see that a laptop's weight is the strongest predictor as to whether or not a laptop is a Notebook (heavier) or Ultrabook (lighter). 
+
+
